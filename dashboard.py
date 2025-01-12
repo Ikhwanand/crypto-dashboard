@@ -5,12 +5,16 @@ import plotly.graph_objs as go
 from plotly.subplots import make_subplots
 from ta import add_all_ta_features
 from ta.utils import dropna
+from sklearn.preprocessing import MinMaxScaler
+import numpy as np
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Dropout
 
 # Set page configuration
 st.set_page_config(page_title="Crypto Dashboard", layout="wide", page_icon=':chart_with_upwards_trend:')
 
 # Title
-st.title("Cryptocurrency Dashboard with Technical Analysis")
+st.title("Cryptocurrency Dashboard with Technical Analysis and LSTM Predictions")
 
 # Sidebar for user input
 st.sidebar.header("User Inputs")
@@ -182,6 +186,89 @@ if not data.empty:
 
     # Display the chart in Streamlit
     st.plotly_chart(fig)
+    
+    st.sidebar.subheader("Prediction Settings")
+    forecast_days = st.sidebar.slider("Forecast Days", min_value=7, max_value=60, value=7)
+    
+    if st.sidebar.button("Predict with LSTM"):
+        # Prepare data for LSTM
+        df = data[['Close']].copy()
+        
+        # Normalize the data
+        scaler = MinMaxScaler(feature_range=(0, 1))
+        scaled_data = scaler.fit_transform(df)
+        
+        # Create the training dataset
+        training_data_len = int(np.ceil(len(scaled_data) * 0.8))
+        train_data = scaled_data[0:int(training_data_len), :]
+        
+         # Split into x_train and y_train datasets
+        def create_dataset(dataset, time_step=1):
+            X, y = [], []
+            for i in range(len(dataset) - time_step - 1):
+                a = dataset[i:(i + time_step), 0]
+                X.append(a)
+                y.append(dataset[i + time_step, 0])
+            return np.array(X), np.array(y)
+        
+        time_step = 60
+        x_train, y_train = create_dataset(train_data, time_step)
+        x_test, y_test = create_dataset(scaled_data[training_data_len:], time_step)
+        
+        # Reshape input to be [samples, time steps, features] which is required for LSTM
+        x_train = np.reshape(x_train, (x_train.shape[0], x_train.shape[1], 1))
+        x_test = np.reshape(x_test, (x_test.shape[0], x_test.shape[1], 1))
+        
+        # Build the LSTM model
+        model = Sequential()
+        model.add(LSTM(50, return_sequences=True, input_shape=(x_train.shape[1], 1)))
+        model.add(Dropout(0.2))
+        model.add(LSTM(50, return_sequences=False))
+        model.add(Dropout(0.2))
+        model.add(Dense(25))
+        model.add(Dense(1))
+        
+        # Compile the model
+        model.compile(optimizer='adam', loss='mean_squared_error')
+        
+        # Train the model
+        model.fit(x_train, y_train, batch_size=1, epochs=1)
+        
+        # Create test dataset
+        test_data = scaled_data[training_data_len - time_step:, :]
+        x_test, y_test = create_dataset(test_data, time_step)
+        x_test = np.reshape(x_test, (x_test.shape[0], x_test.shape[1], 1))
+        
+        # Predict future prices
+        predictions = []
+        last_sequence = scaled_data[-time_step:]
+        for _ in range(forecast_days):
+            last_sequence = np.reshape(last_sequence, (1, time_step, 1))
+            next_price = model.predict(last_sequence)
+            predictions.append(next_price[0, 0])
+            last_sequence = np.concatenate((last_sequence[0, 1:, :], next_price), axis=0)
+        
+        predictions = scaler.inverse_transform(np.array(predictions).reshape(-1, 1))
+        
+        # Create a DataFrame for the forecasted prices
+        forecast_dates = pd.date_range(start=data.index[-1], periods=forecast_days + 1, freq='D')[1:]
+        forecast_df = pd.DataFrame({
+            'Date': forecast_dates,
+            'Forecast': predictions.flatten()
+        })
+        
+        # Plot the forecast
+        fig_forecast = go.Figure()
+        fig_forecast.add_trace(go.Scatter(x=data.index, y=data['Close'], mode='lines', name='Historical Prices'))
+        fig_forecast.add_trace(go.Scatter(x=forecast_df['Date'], y=forecast_df['Forecast'], mode='lines', name='Forecast'))
+        fig_forecast.update_layout(
+            title=f"{selected_crypto} Price Forecast",
+            xaxis=dict(title='Date'),
+            yaxis=dict(title='Price')
+        )
+        
+        st.plotly_chart(fig_forecast)
+        st.write(forecast_df)
 
 else:
     st.write("No data available for the selected time range.")
