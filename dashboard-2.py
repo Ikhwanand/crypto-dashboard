@@ -9,6 +9,9 @@ from sklearn.preprocessing import MinMaxScaler
 import numpy as np
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
+from keras.models import Model
+from keras.layers import Dense, Input, Activation
+from keras import optimizers
 
 # Set page configuration
 st.set_page_config(page_title="Crypto Dashboard", layout="wide", page_icon=':chart_with_upwards_trend:')
@@ -188,7 +191,7 @@ if not data.empty:
     st.plotly_chart(fig)
     
     st.sidebar.subheader("Prediction Settings")
-    forecast_days = st.sidebar.slider("Forecast Days", min_value=7, max_value=60, value=7)
+    forecast_days = st.sidebar.slider("Forecast Days", min_value=7, max_value=90, value=7)
     
     if st.sidebar.button("Predict with LSTM"):
         # Prepare data for LSTM
@@ -220,19 +223,27 @@ if not data.empty:
         x_test = np.reshape(x_test, (x_test.shape[0], x_test.shape[1], 1))
         
         # Build the LSTM model
-        model = Sequential()
-        model.add(LSTM(50, return_sequences=True, input_shape=(x_train.shape[1], 1)))
-        model.add(Dropout(0.2))
-        model.add(LSTM(50, return_sequences=False))
-        model.add(Dropout(0.2))
-        model.add(Dense(25))
-        model.add(Dense(1))
+        # model = Sequential()
+        # model.add(LSTM(50, return_sequences=True, input_shape=(x_train.shape[1], 1)))
+        # model.add(Dropout(0.2))
+        # model.add(LSTM(50, return_sequences=False))
+        # model.add(Dropout(0.2))
+        # model.add(Dense(25))
+        # model.add(Dense(1))
+        
+        lstm_input = Input(shape=(time_step, 1), name='lstm_input')
+        inputs = LSTM(150, name='first_layer')(lstm_input)
+        inputs = Dense(1, name='dense_layer')(inputs)
+        output = Activation('linear', name='output')(inputs)
+        model = Model(inputs=lstm_input, outputs=output)
+        
+        adam = optimizers.Adam()
         
         # Compile the model
-        model.compile(optimizer='adam', loss='mean_squared_error')
+        model.compile(optimizer=adam, loss='mse')
         
         # Train the model
-        model.fit(x_train, y_train, batch_size=15, epochs=30) # you can change the batch size and epochs
+        model.fit(x_train, y_train, batch_size=15, epochs=30, shuffle=True, validation_split=0.1)
         
         # Create test dataset
         test_data = scaled_data[training_data_len - time_step:, :]
